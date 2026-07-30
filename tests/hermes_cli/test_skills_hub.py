@@ -1,4 +1,5 @@
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -378,3 +379,48 @@ class TestAuditScanSource:
         from hermes_cli.skills_hub import _scan_source_for_entry
 
         assert _scan_source_for_entry({"source": "community"}) == "community"
+
+    def test_do_audit_passes_official_source_to_scanner(self, tmp_path, monkeypatch):
+        """Audit-loop wiring: the scanner must actually receive "official".
+
+        The helper tests above cover the derivation; this drives ``do_audit``
+        itself so a future refactor of the loop cannot silently reintroduce
+        passing the raw identifier.
+        """
+        import hermes_cli.skills_hub as hub
+        import tools.skills_hub as hub_mod
+        import tools.skills_guard as guard_mod
+
+        skill_dir = tmp_path / "subagent-driven-development"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+
+        entry = {
+            "name": "subagent-driven-development",
+            "install_path": skill_dir.name,
+            "source": "official",
+            "identifier": "official/software-development/subagent-driven-development",
+        }
+
+        monkeypatch.setattr(hub_mod, "SKILLS_DIR", tmp_path, raising=False)
+        monkeypatch.setattr(
+            hub_mod, "HubLockFile", lambda *a, **k: _DummyLockFile([entry]), raising=False
+        )
+
+        seen = {}
+
+        def fake_scan(path, source="community"):
+            seen["source"] = source
+            return SimpleNamespace(
+                skill_name="x", source=source, trust_level="builtin",
+                verdict="safe", findings=[],
+            )
+
+        monkeypatch.setattr(guard_mod, "scan_skill", fake_scan, raising=False)
+        monkeypatch.setattr(
+            guard_mod, "format_scan_report", lambda result: "", raising=False
+        )
+
+        hub.do_audit(console=Console(file=StringIO()))
+
+        assert seen["source"] == "official"
